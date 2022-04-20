@@ -18,8 +18,8 @@ import numpy as np
 import time
 
 import paddle
-from paddle.incubate.autograd import Hessian
-from transform import program_transform
+from paddle.autograd.primx import _gradients, global_lower_update, prim2orig
+from paddle.autograd.new_adam_optimizer import AdamOptimizer
 
 paddle.enable_static()
 paddle.seed(1234)
@@ -90,16 +90,12 @@ with paddle.static.program_guard(train_program, startup_program):
     net = psci.network.FCNetStatic(
         num_ins=2,
         num_outs=1,
-        num_layers=5,
-        hidden_size=20,
+        num_layers=10,
+        hidden_size=50,
         dtype='float32',
         activation='tanh')
 
     outputs = net.nn_func(inputs)
-
-    # eq_loss
-    hes = Hessian(net.nn_func, inputs, is_batched=True)
-    eq_loss = paddle.norm(hes[:, 0, 0] + hes[:, 1, 1], p=2)
 
     # bc_loss
     bc_index = paddle.static.data(name='bc_idx', shape=[40], dtype='int32')
@@ -107,75 +103,85 @@ with paddle.static.program_guard(train_program, startup_program):
     bc_u = paddle.index_select(outputs, bc_index)
     bc_diff = bc_u - bc_value
     bc_loss = paddle.norm(bc_diff, p=2)
-    loss = eq_loss + bc_loss
-    paddle.optimizer.Adam(learning_rate=0.001).minimize(loss)
+    global_lower_update.append(bc_loss)
 
-new_program = program_transform(train_program)
+    # eq_loss
+    jac, = _gradients([outputs], [inputs])
+    hes_1, = _gradients([jac[:, 0]], [inputs])
+    hes_2, = _gradients([jac[:, 1]], [inputs])
+    eq_loss = paddle.norm(hes_1[:, 0] + hes_1[:, 1], p=2)
+    global_lower_update.append(eq_loss)
+
+    loss = global_lower_update[0] + global_lower_update[1]
+    global_lower_update.append(loss)
+    AdamOptimizer(0.001).minimize(global_lower_update[2])
+    # prim2orig(inputs.block)
+
 # print('startup_program: ', startup_program)
 # print('train_program: ', train_program)
-# print('new_program: ', new_program)
+print("[bc_loss, eq_loss, loss]: ", global_lower_update)
 
 exe.run(startup_program)
-num_epoch = 2010
+num_epoch = 2000
 
-compiled_program = compile(new_program, loss.name)
-train_program = compile(train_program, loss.name)
+train_program = compile(train_program, global_lower_update[2])
+print("Congratulations !!!")
 
-begin = time.time()
-
-if os.getenv('FLAGS_use_cinn') == "1":
-    for i in range(num_epoch):
-        if i == 10:
-            paddle.device.cuda.synchronize()
-            begin = time.time()
-            print("begin With CINN at ", begin)
-
-        loss_d = exe.run(compiled_program,
-                         feed={
-                             'x': geo.get_space_domain().astype(np.float32),
-                             'bc_idx': geo.bc_index.astype(np.int32),
-                             'bc_v': pdes.bc_value
-                         },
-                         fetch_list=[loss.name])
-        print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0][0])
-
-    end = time.time()
-    print("[With CINN] 2000 epoch(10~2010) time: ", end - begin, " s")
-else:
-    for i in range(num_epoch):
-        if i == 10:
-            paddle.device.cuda.synchronize()
-            begin = time.time()
-            print("begin Without CINN at ", begin)
-
-        loss_d, eq_loss_d, bc_loss_d = exe.run(
-            train_program,
-            feed={
-                'x': geo.get_space_domain().astype(np.float32),
-                'bc_idx': geo.bc_index.astype(np.int32),
-                'bc_v': pdes.bc_value
-            },
-            fetch_list=[loss.name, eq_loss.name, bc_loss.name])
-        print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0])
-
-    end = time.time()
-    print("[Without CINN] 2000 epoch(10~2010) time: ", end - begin, " s")
-
-rslt = exe.run(train_program,
-               feed={
-                   'x': geo.get_space_domain().astype(np.float32),
-                   'bc_idx': geo.bc_index.astype(np.int32),
-                   'bc_v': pdes.bc_value
-               },
-               fetch_list=[outputs.name, ])[0]
-psci.visu.save_vtk(geo, rslt, 'rslt_laplace_2d')
-np.save('./rslt_laplace_2d.npy', rslt)
-
-# Calculate diff and l2 relative error
-diff = rslt - golden
-psci.visu.save_vtk(geo, diff, 'diff_laplace_2d')
-np.save('./diff_laplace_2d.npy', diff)
-root_square_error = np.linalg.norm(diff, ord=2)
-mean_square_error = root_square_error * root_square_error / geo.get_domain_size(
-)
-print('mean_sqeare_error: ', mean_square_error)
+# begin = time.time()
+# 
+# if os.getenv('FLAGS_use_cinn') == "1":
+#     for i in range(num_epoch):
+#         if i == 10:
+#             paddle.device.cuda.synchronize()
+#             begin = time.time()
+#             print("begin With CINN at ", begin)
+# 
+#         loss_d = exe.run(train_program,
+#                          feed={
+#                              'x': geo.get_space_domain().astype(np.float32),
+#                              'bc_idx': geo.bc_index.astype(np.int32),
+#                              'bc_v': pdes.bc_value
+#                          },
+#                          fetch_list=[loss.name])
+#         print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0][0])
+# 
+#     end = time.time()
+#     print("[With CINN] 2000 epoch(10~2010) time: ", end - begin, " s")
+# else:
+#     for i in range(num_epoch):
+#         if i == 10:
+#             paddle.device.cuda.synchronize()
+#             begin = time.time()
+#             print("begin Without CINN at ", begin)
+# 
+#         loss_d, eq_loss_d, bc_loss_d = exe.run(
+#             train_program,
+#             feed={
+#                 'x': geo.get_space_domain().astype(np.float32),
+#                 'bc_idx': geo.bc_index.astype(np.int32),
+#                 'bc_v': pdes.bc_value
+#             },
+#             fetch_list=[loss.name, eq_loss.name, bc_loss.name])
+#         print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0])
+# 
+#     end = time.time()
+#     print("[Without CINN] 2000 epoch(10~2010) time: ", end - begin, " s")
+# 
+# rslt = exe.run(train_program,
+#                feed={
+#                    'x': geo.get_space_domain().astype(np.float32),
+#                    'bc_idx': geo.bc_index.astype(np.int32),
+#                    'bc_v': pdes.bc_value
+#                },
+#                fetch_list=[outputs.name, ])[0]
+# psci.visu.save_vtk(geo, rslt, 'rslt_laplace_2d')
+# np.save('./rslt_laplace_2d.npy', rslt)
+# 
+# # Calculate diff and l2 relative error
+# diff = rslt - golden
+# psci.visu.save_vtk(geo, diff, 'diff_laplace_2d')
+# np.save('./diff_laplace_2d.npy', diff)
+# root_square_error = np.linalg.norm(diff, ord=2)
+# mean_square_error = root_square_error * root_square_error / geo.get_domain_size(
+# )
+# print('mean_sqeare_error: ', mean_square_error)
