@@ -74,8 +74,8 @@ pdes, geo = psci.discretize(pdes, geo, space_nsteps=(11, 11))
 golden, bc_value = GenSolution(geo.get_space_domain(), geo.get_bc_index())
 pdes.set_bc_value(bc_value=bc_value)
 
-psci.visu.save_vtk(geo, golden, 'golden_laplace_2d')
-np.save('./golden_laplace_2d.npy', golden)
+# psci.visu.save_vtk(geo, golden, 'golden_laplace_2d')
+# np.save('./golden_laplace_2d.npy', golden)
 
 place = paddle.CUDAPlace(0)
 exe = paddle.static.Executor(place)
