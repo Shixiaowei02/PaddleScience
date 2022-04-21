@@ -78,7 +78,7 @@ opt = psci.optimizer.Adam(learning_rate=0.001, parameters=net.parameters())
 
 # Solver
 solver = psci.solver.Solver(algo=algo, opt=opt)
-solution = solver.solve(num_epoch=10)
+solution = solver.solve(num_epoch=20)
 
 # Use solution
 rslt = solution(geo)
