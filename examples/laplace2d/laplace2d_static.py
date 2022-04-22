@@ -16,7 +16,8 @@ import paddlescience as psci
 import numpy as np
 import paddle
 import time
-from paddle.static import gradients
+# from paddle.static import gradients
+from paddle.incubate.autograd import Hessian
 
 paddle.enable_static()
 paddle.seed(1234)
@@ -95,10 +96,12 @@ with paddle.static.program_guard(train_program, startup_program):
     outputs = net.nn_func(inputs)
 
     # eq_loss
-    jac, = gradients([outputs], [inputs])
-    hes_1, = gradients([jac[:, 0]], [inputs])
-    hes_2, = gradients([jac[:, 1]], [inputs])
-    eq_loss = paddle.norm(hes_1[:, 0] + hes_1[:, 1], p=2)
+    hes = Hessian(net.nn_func, inputs, is_batched=True)
+    eq_loss = paddle.norm(hes[:, 0, 0] + hes[:, 1, 1], p=2)
+    # jac, = gradients([outputs], [inputs])
+    # hes_0, = gradients([jac[:, 0]], [inputs])
+    # hes_1, = gradients([jac[:, 1]], [inputs])
+    # eq_loss = paddle.norm(hes_0[:, 0] + hes_1[:, 1], p=2)
 
     # bc_loss
     bc_index = paddle.static.data(name='bc_idx', shape=[400], dtype='int32')
@@ -113,7 +116,7 @@ with paddle.static.program_guard(train_program, startup_program):
 # print('train_program: ', train_program)
 
 exe.run(startup_program)
-num_epoch = 20
+num_epoch = 10000
 
 train_program = compile(train_program, loss.name)
 
@@ -132,7 +135,7 @@ for i in range(num_epoch):
           outputs_d[0][0])
 
 end = time.time()
-print('20 epoches time: ', end - begin)
+print('10000 epoches time: ', end - begin)
 
 rslt = exe.run(train_program,
                feed={

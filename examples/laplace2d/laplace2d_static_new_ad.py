@@ -107,9 +107,9 @@ with paddle.static.program_guard(train_program, startup_program):
 
     # eq_loss
     jac, = _gradients([glu[0]], [inputs])
-    hes_1, = _gradients([jac[:, 0]], [inputs])
-    hes_2, = _gradients([jac[:, 1]], [inputs])
-    eq_loss = paddle.norm(hes_1[:, 0] + hes_1[:, 1], p=2)
+    hes_0, = _gradients([jac[:, 0]], [inputs])
+    hes_1, = _gradients([jac[:, 1]], [inputs])
+    eq_loss = paddle.norm(hes_0[:, 0] + hes_1[:, 1], p=2)
     glu.append(eq_loss)
 
     loss = glu[1] + glu[2]
@@ -122,7 +122,7 @@ with paddle.static.program_guard(train_program, startup_program):
 print("[outputs, bc_loss, eq_loss, loss]: ", glu)
 
 exe.run(startup_program)
-num_epoch = 20
+num_epoch = 10000
 
 train_program = compile(train_program, glu[3].name)
 print("Get train program successfully, congratulations !!!")
@@ -142,7 +142,7 @@ for i in range(num_epoch):
           outputs_d[0][0])
 
 end = time.time()
-print('20 epoches time: ', end - begin)
+print('10000 epoches time: ', end - begin)
 
 rslt = exe.run(train_program,
                feed={
