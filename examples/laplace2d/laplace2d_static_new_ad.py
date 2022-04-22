@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import paddlescience as psci
 import numpy as np
-import time
-
 import paddle
 from paddle.autograd.primx import _gradients, prim2orig
 from paddle.autograd.primx import global_lower_update as glu
 from paddle.autograd.new_adam_optimizer import AdamOptimizer
+import time
 
 paddle.enable_static()
 paddle.seed(1234)
@@ -69,7 +67,7 @@ geo = psci.geometry.Rectangular(
 pdes = psci.pde.Laplace2D()
 
 # Discretization
-pdes, geo = psci.discretize(pdes, geo, space_nsteps=(11, 11))
+pdes, geo = psci.discretize(pdes, geo, space_nsteps=(101, 101))
 
 # bc value
 golden, bc_value = GenSolution(geo.get_space_domain(), geo.get_bc_index())
@@ -91,7 +89,7 @@ with paddle.static.program_guard(train_program, startup_program):
     net = psci.network.FCNetStatic(
         num_ins=2,
         num_outs=1,
-        num_layers=5,
+        num_layers=10,
         hidden_size=20,
         dtype='float32',
         activation='tanh')
@@ -100,8 +98,8 @@ with paddle.static.program_guard(train_program, startup_program):
     glu.append(outputs)
 
     # bc_loss
-    bc_index = paddle.static.data(name='bc_idx', shape=[40], dtype='int32')
-    bc_value = paddle.static.data(name='bc_v', shape=[40, 1], dtype='float32')
+    bc_index = paddle.static.data(name='bc_idx', shape=[400], dtype='int32')
+    bc_value = paddle.static.data(name='bc_v', shape=[400, 1], dtype='float32')
     bc_u = paddle.index_select(glu[0], bc_index)
     bc_diff = bc_u - bc_value
     bc_loss = paddle.norm(bc_diff, p=2)
@@ -129,16 +127,22 @@ num_epoch = 20
 train_program = compile(train_program, glu[3].name)
 print("Get train program successfully, congratulations !!!")
 
+begin = time.time()
 for i in range(num_epoch):
-    loss_d, eq_loss_d, bc_loss_d = exe.run(
+    loss_d, eq_loss_d, bc_loss_d, outputs_d = exe.run(
         train_program,
         feed={
             'x': geo.get_space_domain().astype(np.float32),
             'bc_idx': geo.bc_index.astype(np.int32),
             'bc_v': pdes.bc_value
         },
-        fetch_list=[glu[3].name, glu[2].name, glu[1].name])
-    print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0])
+        fetch_list=[glu[3].name, glu[2].name, glu[1].name, glu[0].name])
+    print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0], ' eq_loss: ',
+          eq_loss_d[0], 'bc_loss: ', bc_loss_d[0], 'outputs[0][0]: ',
+          outputs_d[0][0])
+
+end = time.time()
+print('20 epoches time: ', end - begin)
 
 rslt = exe.run(train_program,
                feed={
@@ -147,13 +151,13 @@ rslt = exe.run(train_program,
                    'bc_v': pdes.bc_value
                },
                fetch_list=[glu[0].name, ])[0]
-psci.visu.save_vtk(geo, rslt, 'rslt_laplace_2d')
-np.save('./rslt_laplace_2d.npy', rslt)
+# psci.visu.save_vtk(geo, rslt, 'rslt_laplace_2d')
+# np.save('./rslt_laplace_2d.npy', rslt)
 
 # Calculate diff and l2 relative error
 diff = rslt - golden
-psci.visu.save_vtk(geo, diff, 'diff_laplace_2d')
-np.save('./diff_laplace_2d.npy', diff)
+# psci.visu.save_vtk(geo, diff, 'diff_laplace_2d')
+# np.save('./diff_laplace_2d.npy', diff)
 root_square_error = np.linalg.norm(diff, ord=2)
 mean_square_error = root_square_error * root_square_error / geo.get_domain_size(
 )
