@@ -15,14 +15,13 @@
 import paddlescience as psci
 import numpy as np
 import paddle
-from paddle.autograd.primx import _gradients, prim2orig
-from paddle.autograd.primx import global_lower_update as glu
-from paddle.autograd.new_adam_optimizer import AdamOptimizer
+from paddle.fluid.incubate.ad_transform.primx import prim2orig, enable_prim, prim_enabled
 import time
 
 paddle.enable_static()
 paddle.seed(1234)
 np.random.seed(1234)
+enable_prim()
 
 
 def compile(program, loss_name=None):
@@ -95,36 +94,32 @@ with paddle.static.program_guard(train_program, startup_program):
         activation='tanh')
 
     outputs = net.nn_func(inputs)
-    glu.append(outputs)
 
     # bc_loss
     bc_index = paddle.static.data(name='bc_idx', shape=[400], dtype='int32')
     bc_value = paddle.static.data(name='bc_v', shape=[400, 1], dtype='float32')
-    bc_u = paddle.index_select(glu[0], bc_index)
+    bc_u = paddle.index_select(outputs, bc_index)
     bc_diff = bc_u - bc_value
     bc_loss = paddle.norm(bc_diff, p=2)
-    glu.append(bc_loss)
 
     # eq_loss
-    jac, = _gradients([glu[0]], [inputs])
-    hes_0, = _gradients([jac[:, 0]], [inputs])
-    hes_1, = _gradients([jac[:, 1]], [inputs])
+    jac, = paddle.static.gradients([outputs], [inputs])
+    hes_0, = paddle.static.gradients([jac[:, 0]], [inputs])
+    hes_1, = paddle.static.gradients([jac[:, 1]], [inputs])
     eq_loss = paddle.norm(hes_0[:, 0] + hes_1[:, 1], p=2)
-    glu.append(eq_loss)
 
-    loss = glu[1] + glu[2]
-    glu.append(loss)
-    AdamOptimizer(0.001).minimize(glu[3])
-    prim2orig(inputs.block)
+    loss = bc_loss + eq_loss
+    paddle.fluid.optimizer.AdamOptimizer(0.001).minimize(loss)
+    if prim_enabled():
+        prim2orig(inputs.block)
 
 # print('startup_program: ', startup_program)
 # print('train_program: ', train_program)
-print("[outputs, bc_loss, eq_loss, loss]: ", glu)
 
 exe.run(startup_program)
 num_epoch = 10000
 
-train_program = compile(train_program, glu[3].name)
+train_program = compile(train_program, loss.name)
 print("Get train program successfully, congratulations !!!")
 
 begin = time.time()
@@ -136,7 +131,7 @@ for i in range(num_epoch):
             'bc_idx': geo.bc_index.astype(np.int32),
             'bc_v': pdes.bc_value
         },
-        fetch_list=[glu[3].name, glu[2].name, glu[1].name, glu[0].name])
+        fetch_list=[loss.name, eq_loss.name, bc_loss.name, outputs.name])
     print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0], ' eq_loss: ',
           eq_loss_d[0], 'bc_loss: ', bc_loss_d[0], 'outputs[0][0]: ',
           outputs_d[0][0])
@@ -150,7 +145,7 @@ rslt = exe.run(train_program,
                    'bc_idx': geo.bc_index.astype(np.int32),
                    'bc_v': pdes.bc_value
                },
-               fetch_list=[glu[0].name, ])[0]
+               fetch_list=[outputs.name, ])[0]
 # psci.visu.save_vtk(geo, rslt, 'rslt_laplace_2d')
 # np.save('./rslt_laplace_2d.npy', rslt)
 
