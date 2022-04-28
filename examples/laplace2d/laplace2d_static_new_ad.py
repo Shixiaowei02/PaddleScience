@@ -12,11 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import paddlescience as psci
-import numpy as np
+import sys
+sys.path.append("/workspace/PaddleScience")
+
 import paddle
-from paddle.fluid.incubate.ad_transform.primx import prim2orig, enable_prim, prim_enabled
 import time
+import six
+import paddlescience as psci
+import paddle.compat as cpt
+import numpy as np
+from paddle import fluid
+from paddle.fluid import core
+from paddle.fluid.framework import Variable
+from paddle.fluid.incubate.ad_transform.primx import enable_prim, prim2orig, prim_enabled
+from paddle.static import global_scope
+
 
 paddle.enable_static()
 paddle.seed(1234)
@@ -38,6 +48,77 @@ def compile(program, loss_name=None):
 
     return compiled_program
 
+def compile_and_convert_back_to_program(program=None,
+                                   fetch_list=None,
+                                   fetch_var_name='fetch',
+                                   scope=None,
+                                   loss_name=None):
+    def _add_fetch_ops(program, fetch_list, fetch_var_name):
+        assert isinstance(program, fluid.Program)
+        tmp_program = program.clone()
+        global_block = tmp_program.global_block()
+
+        if fetch_var_name in global_block.vars:
+            fetch_var = global_block.var(fetch_var_name)
+        else:
+            fetch_var = global_block.create_var(
+                name=fetch_var_name,
+                type=core.VarDesc.VarType.FETCH_LIST,
+                persistable=True)
+
+        # append fetch_operators
+        if not fluid.executor.has_fetch_operators(global_block, fetch_list,
+                                                  fetch_var_name, 'fetch'):
+            for i, var in enumerate(fetch_list):
+                assert isinstance(var, Variable) or isinstance(
+                    var, six.string_types), (
+                        "Wrong type for fetch_list[%s]: %s" % (i, type(var)))
+                global_block.append_op(
+                    type='fetch',
+                    inputs={'X': [var]},
+                    outputs={'Out': [fetch_var]},
+                    attrs={'col': i})
+        return tmp_program
+
+    def _remove_fetch_ops(program):
+        assert isinstance(program, fluid.Program)
+        tmp_program = program.clone()
+        global_block = tmp_program.global_block()
+        op_num = len(global_block.ops)
+        for idx in reversed(range(op_num)):
+            if global_block.ops[idx].type == 'fetch':
+                global_block._remove_op(idx)
+
+        return tmp_program
+
+    if program is None:
+        program = default_main_program()
+
+    if scope is None:
+        scope = global_scope()
+
+    executor = paddle.static.Executor()
+
+    fetch_list = executor._check_fetch_list(fetch_list)
+    fetch_list, optimize_ops = executor._split_optimize_ops_in_fetch_list(
+        fetch_list)
+
+    if optimize_ops:
+        raise ValueError("Unsupport to fetch optimize OP.")
+
+    program_with_fetch_op = _add_fetch_ops(program, fetch_list, fetch_var_name)
+    compiled_program = compile(program_with_fetch_op, loss_name)
+    assert isinstance(compiled_program, fluid.compiler.CompiledProgram)
+
+    compiled_program._compile(scope, paddle.framework._current_expected_place())
+    compiled_graph = compiled_program._graph
+    ir_graph = fluid.framework.IrGraph(compiled_graph, for_test=True)
+    #ir_graph.draw(save_path='./', name='compiled_graph')
+    ir_program = ir_graph.to_program()
+    final_program = _remove_fetch_ops(ir_program)
+
+    #paddle.static.save(final_program, "final")
+    return final_program
 
 # Analytical solution
 def LaplaceRecSolution(x, y, k=1.0):
@@ -119,7 +200,13 @@ with paddle.static.program_guard(train_program, startup_program):
 exe.run(startup_program)
 num_epoch = 10000
 
-train_program = compile(train_program, loss.name)
+convert_back_to_program = True
+if convert_back_to_program:
+    compiled_program = compile_and_convert_back_to_program(
+        train_program, fetch_list=[loss.name, eq_loss.name, bc_loss.name, outputs.name], loss_name=loss.name)
+else:
+    compiled_program = compile(train_program, loss.name)
+
 print("Get train program successfully, congratulations !!!")
 
 begin = time.time()
