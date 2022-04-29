@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-sys.path.append("/workspace/PaddleScience")
-
 import paddle
 import time
 import six
@@ -26,7 +23,6 @@ from paddle.fluid import core
 from paddle.fluid.framework import Variable
 from paddle.fluid.incubate.ad_transform.primx import enable_prim, prim2orig, prim_enabled
 from paddle.static import global_scope
-
 
 paddle.enable_static()
 paddle.seed(1234)
@@ -48,11 +44,12 @@ def compile(program, loss_name=None):
 
     return compiled_program
 
+
 def compile_and_convert_back_to_program(program=None,
-                                   fetch_list=None,
-                                   fetch_var_name='fetch',
-                                   scope=None,
-                                   loss_name=None):
+                                        fetch_list=None,
+                                        fetch_var_name='fetch',
+                                        scope=None,
+                                        loss_name=None):
     def _add_fetch_ops(program, fetch_list, fetch_var_name):
         assert isinstance(program, fluid.Program)
         tmp_program = program.clone()
@@ -110,7 +107,8 @@ def compile_and_convert_back_to_program(program=None,
     compiled_program = compile(program_with_fetch_op, loss_name)
     assert isinstance(compiled_program, fluid.compiler.CompiledProgram)
 
-    compiled_program._compile(scope, paddle.framework._current_expected_place())
+    compiled_program._compile(scope,
+                              paddle.framework._current_expected_place())
     compiled_graph = compiled_program._graph
     ir_graph = fluid.framework.IrGraph(compiled_graph, for_test=True)
     #ir_graph.draw(save_path='./', name='compiled_graph')
@@ -119,6 +117,7 @@ def compile_and_convert_back_to_program(program=None,
 
     #paddle.static.save(final_program, "final")
     return final_program
+
 
 # Analytical solution
 def LaplaceRecSolution(x, y, k=1.0):
@@ -203,7 +202,9 @@ num_epoch = 10000
 convert_back_to_program = True
 if convert_back_to_program:
     compiled_program = compile_and_convert_back_to_program(
-        train_program, fetch_list=[loss.name, eq_loss.name, bc_loss.name, outputs.name], loss_name=loss.name)
+        train_program,
+        fetch_list=[loss.name, eq_loss.name, bc_loss.name, outputs.name],
+        loss_name=loss.name)
 else:
     compiled_program = compile(train_program, loss.name)
 
