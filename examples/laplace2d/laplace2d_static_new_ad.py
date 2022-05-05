@@ -46,9 +46,11 @@ def compile(program, loss_name=None):
 
 
 def compile_and_convert_back_to_program(program=None,
+                                        feed=None,
                                         fetch_list=None,
                                         fetch_var_name='fetch',
                                         scope=None,
+                                        use_prune=False,
                                         loss_name=None):
     def _add_fetch_ops(program, fetch_list, fetch_var_name):
         assert isinstance(program, fluid.Program)
@@ -102,6 +104,10 @@ def compile_and_convert_back_to_program(program=None,
 
     if optimize_ops:
         raise ValueError("Unsupport to fetch optimize OP.")
+
+    if use_prune:
+        program = executor._prune_program(program, feed, fetch_list, optimize_ops)
+        feed = executor._update_feed(program, feed)
 
     program_with_fetch_op = _add_fetch_ops(program, fetch_list, fetch_var_name)
     compiled_program = compile(program_with_fetch_op, loss_name)
@@ -199,11 +205,20 @@ with paddle.static.program_guard(train_program, startup_program):
 exe.run(startup_program)
 num_epoch = 10000
 
+feeds = {
+            'x': geo.get_space_domain().astype(np.float32),
+            'bc_idx': geo.bc_index.astype(np.int32),
+            'bc_v': pdes.bc_value
+        }
+fetchs = [loss.name, eq_loss.name, bc_loss.name, outputs.name]
+
 convert_back_to_program = True
 if convert_back_to_program:
     compiled_program = compile_and_convert_back_to_program(
         train_program,
-        fetch_list=[loss.name, eq_loss.name, bc_loss.name, outputs.name],
+        feed=feeds,
+        fetch_list=fetchs,
+        use_prune=True,
         loss_name=loss.name)
 else:
     compiled_program = compile(train_program, loss.name)
@@ -214,12 +229,8 @@ begin = time.time()
 for i in range(num_epoch):
     loss_d, eq_loss_d, bc_loss_d, outputs_d = exe.run(
         train_program,
-        feed={
-            'x': geo.get_space_domain().astype(np.float32),
-            'bc_idx': geo.bc_index.astype(np.int32),
-            'bc_v': pdes.bc_value
-        },
-        fetch_list=[loss.name, eq_loss.name, bc_loss.name, outputs.name])
+        feed=feeds,
+        fetch_list=fetchs)
     print('num_epoch: ', i, '/', num_epoch, ' loss: ', loss_d[0], ' eq_loss: ',
           eq_loss_d[0], 'bc_loss: ', bc_loss_d[0], 'outputs[0][0]: ',
           outputs_d[0][0])
