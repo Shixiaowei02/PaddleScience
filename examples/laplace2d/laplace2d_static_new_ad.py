@@ -358,11 +358,10 @@ print("Get train program successfully, congratulations !!!")
 
 begin = time.time()
 for i in range(num_epoch):
-    if convert_back_to_program:
-        if i == 10:
-            paddle.device.cuda.synchronize()
-            begin = time.time()
-            print("begin With CINN at ", begin)
+    if i == 10:
+        paddle.device.cuda.synchronize()
+        begin = time.time()
+        print("begin With CINN at ", begin)
 
     loss_d, eq_loss_d, bc_loss_d, outputs_d = exe.run(compiled_program,
                                                       feed=feeds,
