@@ -340,8 +340,8 @@ feeds = {
 }
 fetchs = [loss.name, eq_loss.name, bc_loss.name, outputs.name]
 
-convert_back_to_program = True
 if convert_back_to_program:
+    print("Run without CINN")
     compiled_program = compile_and_convert_back_to_program(
         train_program,
         feed=feeds,
@@ -349,7 +349,7 @@ if convert_back_to_program:
         use_prune=True,
         loss_name=loss.name)
 else:
-    # use CINN
+    print("Run with CINN")
     cinn_optimize_program(train_program)
     add_fetch_ops(train_program, fetch_list=fetchs)
     compiled_program = compile(train_program, loss.name)
@@ -372,7 +372,8 @@ for i in range(num_epoch):
 
 paddle.device.cuda.synchronize()
 end = time.time()
-print('2000 epoch(10~2010) time: ', end - begin, ' s')
+print('{} epoch(10~{}) time: {} s'.format(num_epoch - 10, num_epoch, end -
+                                          begin))
 
 rslt = exe.run(compiled_program,
                feed={
